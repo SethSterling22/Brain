@@ -1,0 +1,128 @@
+graph TB
+    subgraph always_on["🟢 Always On"]
+        SADIDA["🖥️ Sadida\nProxmox VE · k3s master\nOllama (local, GPU)\n192.168.68.10"]
+        AERY["💾 Aery\nDebian 13 · Nextcloud · NFS · k3s worker\n192.168.68.190"]
+    end
+
+    subgraph workers_24["🔵 Nodes 24/7"]
+        OCRA["🧠 Ocra\nDocker Compose brain\nn8n + Hermes + postgres\n100.107.52.17 (Tailscale — WiFi)"]
+        SRAM["💻 Sram\nDebian 13 · k3s worker\n192.168.68.108"]
+    end
+
+    subgraph workers_od["🟡 Workers On-Demand (WOL)"]
+        XELOR["💤 Xelor\nDebian 13 · staging\n192.168.68.114"]
+        SACRO["💤 Sacro\nDebian 13 · observability\n192.168.68.115"]
+    end
+
+    subgraph network["🌐 Network"]
+        SWITCH["Gigabit Switch\nEthernet"]
+        TAILSCALE["Tailscale Mesh VPN\nAll nodes connected"]
+    end
+
+    subgraph power["⚡ Power Monitoring (Phase 3/4)"]
+        SHELLY["🔌 Shelly Plug (Gen4)\nWhole-fleet real wattage\nshared power strip/UPS"]
+        UPS["🔋 CyberPower S175UC UPS\nBattery backup for a subset\nof Sadida/Sram/Sacro/Aery"]
+    end
+
+    OCRA -->|Ollama API :11434| SADIDA
+    SADIDA -->|k3s API| SRAM
+    SADIDA -->|k3s API| AERY
+    SADIDA -.->|on-demand| XELOR
+    SADIDA -.->|on-demand| SACRO
+
+    SWITCH --- SADIDA
+    SWITCH --- AERY
+    SWITCH --- SRAM
+    SWITCH --- OCRA
+    SWITCH --- XELOR
+    SWITCH --- SACRO
+
+    TAILSCALE --- SADIDA
+    TAILSCALE --- SRAM
+    TAILSCALE --- OCRA
+    TAILSCALE --- XELOR
+    TAILSCALE --- SACRO
+    TAILSCALE --- AERY
+
+    SHELLY -.->|HTTP RPC, real watts| OCRA
+    UPS -.->|USB| AERY
+    AERY -.->|NUT :3493 over Tailscale| OCRA
+---END---
+sequenceDiagram
+    actor User
+    participant TG as Telegram
+    participant n8n as n8n (Ocra)
+    participant Hermes as Hermes gateway (Ocra :8080)
+    participant Ollama as Ollama (Sadida GPU :11434)
+    participant Claude as Claude API
+
+    User->>TG: Sends a message
+    TG->>n8n: Telegram trigger
+    n8n->>Hermes: POST /tool/ollama_chat (classify intent, qwen3:1.7b)
+    Hermes->>Ollama: /api/chat
+    Ollama-->>Hermes: intent
+    Hermes-->>n8n: intent
+    alt technical / high quality
+        n8n->>Hermes: POST /tool/claude_chat
+        Hermes->>Claude: messages API
+        Claude-->>Hermes: response
+    else chat / simple
+        n8n->>Hermes: POST /tool/ollama_chat (qwen3.5:4b)
+        Hermes->>Ollama: /api/chat
+        Ollama-->>Hermes: response
+    end
+    Hermes-->>n8n: response
+    n8n->>TG: Send reply
+    TG-->>User: Answer
+---END---
+graph LR
+    subgraph ingress["Ingress Layer"]
+        TRAEFIK["Traefik\nIngress Controller"]
+    end
+
+    subgraph ai["AI Namespace"]
+        OC["OpenClaw\n(optional web UI)"]
+        HM["Hermes\n(Productivity_Tools/hermes-agent/k8s)"]
+        OL["ollama Service\n(ExternalName → Sadida)"]
+    end
+
+    subgraph storage["Storage"]
+        PVC["PersistentVolumeClaims"]
+        NFS["NFS → Aery\n(export path pending re-setup)"]
+    end
+
+    subgraph monitoring["Monitoring Namespace"]
+        PROM["Prometheus"]
+        GRAF["Grafana"]
+        LOKI["Loki"]
+    end
+
+    TRAEFIK --> OC
+    TRAEFIK --> GRAF
+    OC --> OL
+    HM --> OL
+    OL -.->|Tailscale| SADIDA["Ollama on Sadida\n(local host service)"]
+    OC --> PVC
+    PVC --> NFS
+    PROM --> GRAF
+    LOKI --> GRAF
+---END---
+flowchart TD
+    DEV["Your device\n(Tailscale client)"]
+    TS["Tailscale Network"]
+    SADIDA["Sadida\nWOL relay"]
+    WOL["wakeonlan script"]
+    SWITCH["Ethernet Switch\n(broadcast domain)"]
+    XELOR["Xelor wakes up 🟢"]
+    SACRO["Sacro wakes up 🟢"]
+
+    DEV -->|SSH / script| TS
+    TS --> SADIDA
+    SADIDA --> WOL
+    WOL -->|magic packet UDP 9| SWITCH
+    SWITCH --> XELOR
+    SWITCH --> SACRO
+
+    XELOR -->|joins cluster| K3S["k3s master\n(Sadida)"]
+    SACRO -->|joins cluster| K3S
+---END---
