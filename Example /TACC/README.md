@@ -1,0 +1,4 @@
+# Notes
+Taking notes :^)
+
+Hi
